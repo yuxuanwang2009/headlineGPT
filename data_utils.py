@@ -1,13 +1,13 @@
-# Data prep functions for GPT-style training on variable-length names
-# Strategy: concatenate all names into a single token stream, separated by
-# '\n'. GPT can learn to ignore attention from a previous work. 
-# Then sample fixed-length windows that always *start* at a name boundary.
-# Windows are padded with '\n' so every sample is exactly block_size long. 
+# Data prep for GPT-style training on short text with variable lengths
+# Strategy: concatenate all texts into a single token stream, separated by
+# '<|endoftext|>'. GPT can learn to ignore attention from a previous work. 
+# Then sample fixed-length windows that always *start* at a text boundary.
+# Windows are padded with '<|endoftext|>' so every sample has the same length. 
 # As time complexity of an attention head is O(T^2), we don't want the
-# context window to be too large, in our case, no bigger than word length. 
+# context window to be too large, in our case, no bigger than the longest text. 
 # This name boundary alignment is a good practice when window length is 
 # comparable to word length: the model does not waste time on learning
-# how to complete a half word. 
+# how to complete text without the beginning. 
 
 # Run this file to generate a histogram of text length. 
 
