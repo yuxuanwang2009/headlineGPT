@@ -1,102 +1,153 @@
 # headlineGPT
 
-A minimal, nanoGPT-style language model trained on **short headline-like text**.  
-The goal is to keep the code small and readable while making it easy to train and sample concise, punchy outputs.
+A minimal, nanoGPT-style language model trained on **short headline-like text** (one snippet per line).  
+This README focuses on explaining the **data pipeline** implemented in `data_utils.py`.
 
 ---
 
-## Features
-- **Tiny, hackable codebase** (Transformer + LM head).
-- **Short-sequence friendly dataloader** (many short snippets per batch).
-- **Config-driven hyperparameters** (edit `config.py`).
-- **Simple training & sampling scripts** (`run_train.py`, `run_pretrained.py`).
-- **Basic logging/artifacts** (`loss_plot.png`, `generated.txt`).
+## How `data_utils.py` Works
+
+### 1) Input format (one example per line)
+- The dataset is a single text file of **short lines** (e.g., headlines).
+- Each line is separated by a newline `\n`.  
+- Newlines are treated as **record separators**; the model is trained on fixed-length chunks that **start right after** a newline.
+
+> If you prefer a different separator (e.g., `"\t"`, `" ||| "`), change the **separator token** accordingly (see “Customization” below).
 
 ---
 
-## Repository Structure
-```
+### 2) Tokenization
+- `stot(s: str) -> torch.Tensor`: **s**tring **to** **t**okens. Converts raw text to a 1D tensor of token IDs.
+- (Optionally) `ttos(t: torch.Tensor) -> str`: **t**okens **to** **s**tring. Converts token IDs back to text for debugging/sampling.
+- The whole corpus is tokenized once into `self.data` (a 1D tensor of token IDs).
 
-config.py          # model & training hyperparameters
-data_utils.py      # dataset building, tokenization, batching
-model.py           # GPT model (Transformer + LM head)
-train.py           # core training loop
-run_train.py       # CLI to start training
-run_pretrained.py  # CLI to load a checkpoint and generate text
-generated.txt      # sample generations (for reference)
-loss_plot.png      # training loss curve (for reference)
-LICENSE
-README.md
-
-````
+**Why compact tokenization?**  
+Headlines are short and formulaic; a leaner vocab reduces fragmentation and improves sample efficiency.
 
 ---
 
-## Setup
-```bash
-# (optional) create a venv
-python -m venv .venv && source .venv/bin/activate
+### 3) Record boundaries via a special token
+- Let `nl_id = stot("<|endoftext|>")` (or the token you use for line/record breaks).
+- We locate all positions where `self.data == nl_id`.
+  ```python
+  nl_positions = torch.where(self.data == nl_id)[0]
+  ```
 
-# install dependencies (adjust as needed)
-pip install torch numpy tqdm
-````
+`torch.where` returns a tuple; indexing with `[0]` extracts the **1D index tensor**.
 
----
+* We define **start indices** immediately **after** each newline:
 
-## Data
+  ```python
+  self.starts = nl_positions[:-1] + 1  # skip the last newline (no record after)
+  ```
 
-Use a plain-text file of **short lines** (e.g., headlines or titles).
-One example per line is the simplest starting point.
+  Each `self.starts[i]` is the index of the **first token** of a record (the token after a newline).
 
-Example (toy):
-
-```
-Apple unveils new chip
-Markets rally on jobs data
-Researchers question room-temp superconductor claim
-```
-
-If you use a custom delimiter or multiple files, adjust paths/options in `data_utils.py` and/or `config.py`.
+**Why do this?**
+Sampling training chunks only from these starts ensures we **don’t straddle two records**, which is important for very short sequences like headlines.
 
 ---
 
-## Training
+### 4) Fixed-length chunking (no cross-record bleed)
 
-Edit `config.py` for model size, context length, batch size, steps, etc., then:
+* Given `block_size` (context length), a sample at index `k` is:
 
-```bash
-python run_train.py
-```
-
-This will:
-
-* build/tokenize the dataset,
-* train the model,
-* save checkpoints and a loss log (see `loss_plot.png`).
+  ```python
+  i = self.starts[k]
+  x = self.data[i : i + block_size]          # input tokens
+  y = self.data[i + 1 : i + 1 + block_size]  # next-token targets
+  ```
+* If a record is **shorter** than `block_size`, the last part of the window simply spans into padding logic you define (common choices: drop incomplete windows, wrap to next start, or pad—this repo typically **drops**).
 
 ---
 
-## Generation
+### 5) Batching & shuffling
 
-Load a trained checkpoint and generate headline-style text:
+* The dataset exposes `__len__` as the number of valid `self.starts`.
+* The DataLoader:
 
-```bash
-python run_pretrained.py --prompt "Quantum materials breakthrough:"
-```
-
-Common sampling knobs (if exposed): `--max_new_tokens`, `--temperature`, `--top_p`.
+  * **shuffles** indices each epoch (or uses a random permutation).
+  * **batches** by gathering `B` start indices, slicing `(x, y)` windows as above.
+* Because all windows are **fixed length**, no runtime padding is needed inside a batch—this keeps the training loop simple and fast.
 
 ---
 
-## Tips
+### 6) Train/val split
 
-* Headlines are short → prefer **short context** (e.g., 64–128) and **larger batch** if memory allows.
-* Clean the corpus: dedupe, strip boilerplate, keep lines concise.
-* For variety, try **temperature ~0.8–1.0** and **nucleus (top-p) sampling** at inference.
+* `data_utils.py` creates **disjoint** sets of start indices for train and val (e.g., 90/10 split).
+* Splitting happens **after** tokenization and boundary detection, so validation samples are guaranteed not to overlap train samples at the **record** level.
+
+---
+
+## Customization Guide
+
+### Change the record separator
+
+* If your corpus uses a different delimiter than newline:
+
+  1. Pick a unique **separator token** (e.g., `<|sep|>`).
+  2. Insert that token between examples when building the raw text.
+  3. Update the line that finds boundaries:
+
+     ```python
+     sep_id = stot("<|sep|>")
+     sep_positions = torch.where(self.data == sep_id)[0]
+     self.starts = sep_positions[:-1] + 1
+     ```
+* Keep the invariant: **a start index points to the first token *after* a separator**.
+
+### Use multi-file datasets
+
+* Concatenate files into one text stream, inserting the separator token between files.
+* Tokenize once; the same boundary logic applies.
+
+### Short or noisy lines
+
+* You can filter out very short records before computing `self.starts` (e.g., drop lines with < N tokens).
+* You can also cap maximum line length during preprocessing to reduce extremely long outliers.
+
+### 1D vs 2D note (if you ever change shapes)
+
+* `self.data` is 1D here. If you switch to a 2D layout `(B, T)`, note that:
+
+  ```python
+  rows, cols = torch.where(self.data == nl_id)
+  ```
+
+  returns separate row/col index tensors. Pair them with:
+
+  ```python
+  coords = torch.stack((rows, cols), dim=1)
+  ```
+
+  In this repo we **keep it 1D** to avoid that complexity.
+
+---
+
+## FAQ
+
+**Q: Why not just stream the whole file without respecting boundaries?**
+A: Headlines are short. Letting windows cross examples dilutes the learning signal and harms style and concision.
+
+**Q: Do we pad?**
+A: The simplest path is to **drop** windows that would run past a record end. For tiny models and short contexts, this is typically fine; it avoids padding logic entirely.
+
+**Q: Can I sample with stride < `block_size` to increase diversity?**
+A: Yes. Instead of one start per record, you can generate more starts within each record (e.g., every `stride` tokens), as long as you don’t cross the boundary.
+
+---
+
+## Files at a glance
+
+* `data_utils.py` — tokenization, boundary finding, start-index cache, dataset & batching.
+* `config.py` — `block_size`, batch size, split ratio, seed, and file paths.
+* `model.py` — minimal GPT (Transformer + LM head).
+* `train.py`, `run_train.py` — training loop & CLI.
+* `run_pretrained.py` — sampling from checkpoints.
+* `generated.txt`, `loss_plot.png` — artifacts for quick inspection.
 
 ---
 
 ## License
 
-MIT. Inspired by the simplicity and style of nanoGPT.
-
+MIT. Inspired by the simplicity of nanoGPT.
