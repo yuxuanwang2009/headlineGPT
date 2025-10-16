@@ -9,7 +9,7 @@ import os
 import logging
 
 
-# 🔇 silence Inductor autotune logs (junk code?)
+# silence Inductor autotune logs 
 os.environ["TORCHINDUCTOR_VERBOSE"] = "0"
 logging.getLogger("torch._inductor").setLevel(logging.CRITICAL)
 
