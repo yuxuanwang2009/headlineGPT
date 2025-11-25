@@ -79,51 +79,6 @@ Sampling training chunks only from these starts ensures we **don’t straddle tw
 
 ---
 
-## Customization Guide
-
-### Change the record separator
-
-* If your corpus uses a different delimiter than newline:
-
-  1. Pick a unique **separator token** (e.g., `<|sep|>`).
-  2. Insert that token between examples when building the raw text.
-  3. Update the line that finds boundaries:
-
-     ```python
-     sep_id = stot("<|sep|>")
-     sep_positions = torch.where(self.data == sep_id)[0]
-     self.starts = sep_positions[:-1] + 1
-     ```
-* Keep the invariant: **a start index points to the first token *after* a separator**.
-
-### Use multi-file datasets
-
-* Concatenate files into one text stream, inserting the separator token between files.
-* Tokenize once; the same boundary logic applies.
-
-### Short or noisy lines
-
-* You can filter out very short records before computing `self.starts` (e.g., drop lines with < N tokens).
-* You can also cap maximum line length during preprocessing to reduce extremely long outliers.
-
-### 1D vs 2D note (if you ever change shapes)
-
-* `self.data` is 1D here. If you switch to a 2D layout `(B, T)`, note that:
-
-  ```python
-  rows, cols = torch.where(self.data == nl_id)
-  ```
-
-  returns separate row/col index tensors. Pair them with:
-
-  ```python
-  coords = torch.stack((rows, cols), dim=1)
-  ```
-
-  In this repo we **keep it 1D** to avoid that complexity.
-
----
-
 ## FAQ
 
 **Q: Why not just stream the whole file without respecting boundaries?**
