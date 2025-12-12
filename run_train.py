@@ -42,9 +42,9 @@ def main():
             dropout=dropout,
             device = device
         ).to(device)
-        # Compile (CUDA only)
+        # Compile (CUDA only); drop max-autotune to avoid Triton benchmark spam
         if torch.cuda.is_available() and device_type == "cuda":
-            model = torch.compile(model, mode="max-autotune")
+            model = torch.compile(model)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     
