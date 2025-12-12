@@ -51,7 +51,6 @@ class FeedForward(nn.Module):
             nn.Linear(n_emb, n_ffd_hidden),
             nn.GELU(),
             nn.Linear(n_ffd_hidden, n_emb),
-            nn.GELU()
         )
 
     def forward(self, x):

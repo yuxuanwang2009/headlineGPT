@@ -9,14 +9,20 @@ import os
 import logging
 
 
-# silence Inductor autotune logs 
+# Normalize device type for branching
+device_type = device if isinstance(device, str) else device.type
+
+# 🔇 silence Inductor autotune logs (junk code?)
 os.environ["TORCHINDUCTOR_VERBOSE"] = "0"
 logging.getLogger("torch._inductor").setLevel(logging.CRITICAL)
 
-# Add global TF32 + matmul precision flags
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
-torch.set_float32_matmul_precision("high")
+# Add global TF32 + matmul precision flags (CUDA only)
+if torch.cuda.is_available() and device_type == "cuda":
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
+else:
+    torch.set_float32_matmul_precision("highest")
 
 def main():
     # CLI options
@@ -36,8 +42,9 @@ def main():
             dropout=dropout,
             device = device
         ).to(device)
-        # Compile
-        model = torch.compile(model, mode="max-autotune")
+        # Compile (CUDA only)
+        if torch.cuda.is_available() and device_type == "cuda":
+            model = torch.compile(model, mode="max-autotune")
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     

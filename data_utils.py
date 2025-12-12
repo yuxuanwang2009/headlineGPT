@@ -1,13 +1,13 @@
-# Data prep for GPT-style training on short text with variable lengths
-# Strategy: concatenate all texts into a single token stream, separated by
-# '<|endoftext|>'. GPT can learn to ignore attention from a previous work. 
-# Then sample fixed-length windows that always *start* at a text boundary.
-# Windows are padded with '<|endoftext|>' so every sample has the same length. 
+# Data prep functions for GPT-style training on variable-length names
+# Strategy: concatenate all names into a single token stream, separated by
+# '\n'. GPT can learn to ignore attention from a previous work. 
+# Then sample fixed-length windows that always *start* at a name boundary.
+# Windows are padded with '\n' so every sample is exactly block_size long. 
 # As time complexity of an attention head is O(T^2), we don't want the
-# context window to be too large, in our case, no bigger than the longest text. 
+# context window to be too large, in our case, no bigger than word length. 
 # This name boundary alignment is a good practice when window length is 
 # comparable to word length: the model does not waste time on learning
-# how to complete text without the beginning. 
+# how to complete a half word. 
 
 # Run this file to generate a histogram of text length. 
 
@@ -15,7 +15,7 @@ import random, torch
 from torch.utils.data import Dataset, DataLoader
 from collections import defaultdict, Counter
 import math
-from config import split, epoch_steps
+from config import split, epoch_steps, device
 import csv
 import tiktoken
 import matplotlib.pyplot as plt
@@ -130,28 +130,45 @@ def Construct_data_loaders(jokes:torch.Tensor, T, batch_size) -> DataLoader:
     len_val = len_ - len_tr
     jokes_tr, jokes_val = jokes.split([len_tr, len_val])
 
+    device_type = device if isinstance(device, str) else device.type
+    cuda = torch.cuda.is_available() and device_type == "cuda"
+
     # Convert torch.Tensor to Dataset of proper context blocks
     ds_tr = BlockPairDataset(jokes_tr, T, random = True) 
     ds_va = BlockPairDataset(jokes_val, T, random = False)
 
-    # Convert the Datasets to Dataloaders
-    # train_loader = DataLoader(ds_tr, batch_size=batch_size, num_workers=0, pin_memory=False)
-    # val_loader   = DataLoader(ds_va, batch_size=1, num_workers=0, pin_memory=False)
-    train_loader = DataLoader(
-        ds_tr,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=8,
-        pin_memory=True,
-        prefetch_factor=4,
-        persistent_workers=True,
-    )
-    val_loader = DataLoader(
-        ds_va,
-        batch_size=8,
-        num_workers=2,
-        pin_memory=True,
-    )
+    # Convert the Datasets to Dataloaders with backend-specific settings
+    if cuda:
+        train_loader = DataLoader(
+            ds_tr,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=8,
+            pin_memory=True,
+            prefetch_factor=4,
+            persistent_workers=True,
+        )
+        val_loader = DataLoader(
+            ds_va,
+            batch_size=8,
+            num_workers=2,
+            pin_memory=True,
+        )
+    else:
+        # CPU / MPS: simpler loader settings; adjust workers as desired
+        train_loader = DataLoader(
+            ds_tr,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=0,
+            pin_memory=False,
+        )
+        val_loader = DataLoader(
+            ds_va,
+            batch_size=8,
+            num_workers=0,
+            pin_memory=False,
+        )
     
     print(f"Training data (one epoch) consist of {len(ds_tr)} batched blocks of text.", flush=True)
     print(f"Validation data consist of {len(ds_va)} batched blocks of text.\n", flush=True)
